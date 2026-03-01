@@ -68,16 +68,26 @@ public class WorldInventoryManager {
         // Dispatch all inventory work to the world thread so entity access is safe
         CompletableFuture.runAsync(() -> {
             try {
-                // 1. Capture current inventory and save it as previousWorld's snapshot
+                // 1. Load the destination snapshot FIRST, before touching anything
+                InventorySnapshot incoming = storage.load(uuid, newWorld);
+
+                // Safety guard: if the destination is a non-isolated world and has no saved
+                // snapshot, that means we have never tracked this player leaving it before.
+                // Their current inventory may already be their main-world items, so clearing
+                // would destroy them. Abort the swap — they keep what they have.
+                if (incoming == null && !config.isIsolated(newWorld)) {
+                    logger.at(Level.WARNING).log("No snapshot for main world '" + newWorld
+                            + "' for " + uuid + " — skipping swap to prevent item loss");
+                    return;
+                }
+
+                // 2. Capture and save the current inventory as previousWorld's snapshot
                 InventorySnapshot outgoing = capture(player);
                 storage.save(uuid, previousWorld, outgoing);
                 logger.at(Level.FINE).log("Saved " + uuid + " inventory for world '" + previousWorld + "'");
 
-                // 2. Clear the player's inventory
+                // 3. Clear and apply the destination snapshot
                 player.getInventory().clear();
-
-                // 3. Load and apply the target world's snapshot (may be null → stays empty)
-                InventorySnapshot incoming = storage.load(uuid, newWorld);
                 if (incoming != null) {
                     apply(player, incoming);
                     logger.at(Level.FINE).log("Restored " + uuid + " inventory for world '" + newWorld + "'");
