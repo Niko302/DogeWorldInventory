@@ -9,6 +9,7 @@ import com.hypixel.hytale.server.core.event.events.player.PlayerDisconnectEvent;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
+import com.hypixel.hytale.server.core.universe.world.World;
 
 import javax.annotation.Nonnull;
 import java.util.UUID;
@@ -50,7 +51,7 @@ public class DogeWorldInventoryPlugin extends JavaPlugin {
             if (ref == null || player == null) return;
 
             UUID uuid = ref.getUuid();
-            var world = ref.getReference().getStore().getExternalData().getWorld();
+            World world = event.getWorld();
             String newWorld = world.getName();
 
             manager.onPlayerAddedToWorld(uuid, player, newWorld, world);
