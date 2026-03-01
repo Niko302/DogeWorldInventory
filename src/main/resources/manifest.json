@@ -1,5 +1,5 @@
 {
-  "Group": "${plugin_group}",
+  "Group": "Doge",
   "Name": "${plugin_name}",
   "Version": "${plugin_version}",
   "Description": "${plugin_description}",
