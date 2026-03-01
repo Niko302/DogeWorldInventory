@@ -13,6 +13,9 @@ import com.hypixel.hytale.server.core.universe.world.World;
 
 import javax.annotation.Nonnull;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 
 /**
@@ -27,6 +30,7 @@ public class DogeWorldInventoryPlugin extends JavaPlugin {
     private WorldInventoryConfig config;
     private InventoryStorage storage;
     private WorldInventoryManager manager;
+    private ExecutorService ioExecutor;
 
     public DogeWorldInventoryPlugin(@Nonnull JavaPluginInit init) {
         super(init);
@@ -34,12 +38,18 @@ public class DogeWorldInventoryPlugin extends JavaPlugin {
 
     @Override
     protected void setup() {
+        this.ioExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "DogeWorldInventory-IO");
+            t.setDaemon(true);
+            return t;
+        });
+
         this.config = new WorldInventoryConfig(this.getDataDirectory(), this.getLogger());
         this.config.load();
 
         this.storage = new InventoryStorage(this.getDataDirectory(), this.getLogger());
 
-        this.manager = new WorldInventoryManager(config, storage, this.getLogger());
+        this.manager = new WorldInventoryManager(config, storage, this.getLogger(), ioExecutor);
     }
 
     @Override
@@ -81,6 +91,17 @@ public class DogeWorldInventoryPlugin extends JavaPlugin {
 
     @Override
     protected void shutdown() {
+        if (ioExecutor != null) {
+            ioExecutor.shutdown();
+            try {
+                if (!ioExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    ioExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                ioExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
         this.getLogger().at(Level.INFO).log("DogeWorldInventory shutting down.");
     }
 

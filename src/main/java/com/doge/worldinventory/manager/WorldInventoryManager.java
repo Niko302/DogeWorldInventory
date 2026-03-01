@@ -21,38 +21,35 @@ import java.util.logging.Level;
 /**
  * Core save/restore logic for per-world inventory isolation.
  *
- * All inventory operations are dispatched to the world executor so they run
- * on the correct world thread.
+ * Thread model:
+ *   - Inventory reads/writes run on the world executor (world thread).
+ *   - File I/O runs on the ioExecutor (dedicated background thread).
+ *   - The two are chained with CompletableFuture so neither blocks the other.
  */
 public class WorldInventoryManager {
 
     private final WorldInventoryConfig config;
     private final InventoryStorage storage;
     private final HytaleLogger logger;
+    private final Executor ioExecutor;
 
     /** Tracks the world name each online player is currently in. */
     private final Map<UUID, String> playerCurrentWorld = new ConcurrentHashMap<>();
 
     public WorldInventoryManager(WorldInventoryConfig config,
                                   InventoryStorage storage,
-                                  HytaleLogger logger) {
+                                  HytaleLogger logger,
+                                  Executor ioExecutor) {
         this.config = config;
         this.storage = storage;
         this.logger = logger;
+        this.ioExecutor = ioExecutor;
     }
 
     // -------------------------------------------------------------------------
-    // Event handlers — called from the plugin's event listeners
+    // Event handlers
     // -------------------------------------------------------------------------
 
-    /**
-     * Called when a player is added to a world.
-     *
-     * @param uuid          player UUID
-     * @param player        Player component (accessed on the world thread via worldExecutor)
-     * @param newWorld      name of the world the player is entering
-     * @param worldExecutor executor that runs tasks on the new world's thread
-     */
     public void onPlayerAddedToWorld(UUID uuid, Player player, String newWorld, Executor worldExecutor) {
         String previousWorld = playerCurrentWorld.get(uuid);
         playerCurrentWorld.put(uuid, newWorld);
@@ -60,69 +57,72 @@ public class WorldInventoryManager {
         boolean prevIsolated = config.isIsolated(previousWorld);
         boolean nextIsolated = config.isIsolated(newWorld);
 
-        // Only act when at least one side is isolated
         if (previousWorld == null || (!prevIsolated && !nextIsolated)) {
             return;
         }
 
-        // Dispatch all inventory work to the world thread so entity access is safe
-        CompletableFuture.runAsync(() -> {
-            try {
-                // 1. Load the destination snapshot FIRST, before touching anything
-                InventorySnapshot incoming = storage.load(uuid, newWorld);
+        // Step 1 — IO thread: load the destination snapshot before touching anything
+        CompletableFuture
+            .supplyAsync(() -> storage.load(uuid, newWorld), ioExecutor)
 
-                // Safety guard: if the destination is a non-isolated world and has no saved
-                // snapshot, that means we have never tracked this player leaving it before.
-                // Their current inventory may already be their main-world items, so clearing
-                // would destroy them. Abort the swap — they keep what they have.
+            // Step 2 — world thread: check snapshot, capture current inventory
+            .thenApplyAsync(incoming -> {
+                // Safety guard: no saved snapshot for non-isolated destination means we have
+                // never tracked this player leaving it — abort to prevent item loss.
                 if (incoming == null && !config.isIsolated(newWorld)) {
                     logger.at(Level.WARNING).log("No snapshot for main world '" + newWorld
                             + "' for " + uuid + " — skipping swap to prevent item loss");
-                    return;
+                    return null;
                 }
-
-                // 2. Capture and save the current inventory as previousWorld's snapshot
                 InventorySnapshot outgoing = capture(player);
-                storage.save(uuid, previousWorld, outgoing);
-                logger.at(Level.FINE).log("Saved " + uuid + " inventory for world '" + previousWorld + "'");
+                return new SnapshotPair(outgoing, incoming);
+            }, worldExecutor)
 
-                // 3. Clear and apply the destination snapshot
+            // Step 3 — IO thread: save the outgoing snapshot
+            .thenApplyAsync(pair -> {
+                if (pair == null) return null;
+                storage.save(uuid, previousWorld, pair.outgoing);
+                logger.at(Level.FINE).log("Saved " + uuid + " inventory for world '" + previousWorld + "'");
+                return pair;
+            }, ioExecutor)
+
+            // Step 4 — world thread: clear and apply
+            .thenAcceptAsync(pair -> {
+                if (pair == null) return;
                 player.getInventory().clear();
-                if (incoming != null) {
-                    apply(player, incoming);
+                if (pair.incoming != null) {
+                    apply(player, pair.incoming);
                     logger.at(Level.FINE).log("Restored " + uuid + " inventory for world '" + newWorld + "'");
                 }
-
                 player.sendInventory();
+            }, worldExecutor)
 
-            } catch (Exception e) {
+            .exceptionally(e -> {
                 logger.at(Level.SEVERE).log("Error swapping inventory for " + uuid + ": " + e.getMessage());
-            }
-        }, worldExecutor);
+                return null;
+            });
     }
 
-    /**
-     * Called when a player disconnects.
-     *
-     * @param uuid          player UUID
-     * @param player        Player component
-     * @param worldExecutor executor for the player's current world
-     */
     public void onPlayerDisconnect(UUID uuid, Player player, Executor worldExecutor) {
         String currentWorld = playerCurrentWorld.remove(uuid);
         if (!config.isIsolated(currentWorld)) {
             return;
         }
 
-        CompletableFuture.runAsync(() -> {
-            try {
-                InventorySnapshot snapshot = capture(player);
+        // Step 1 — world thread: capture inventory
+        CompletableFuture
+            .supplyAsync(() -> capture(player), worldExecutor)
+
+            // Step 2 — IO thread: save to disk
+            .thenAcceptAsync(snapshot -> {
                 storage.save(uuid, currentWorld, snapshot);
                 logger.at(Level.FINE).log("Saved " + uuid + " inventory on disconnect from world '" + currentWorld + "'");
-            } catch (Exception e) {
+            }, ioExecutor)
+
+            .exceptionally(e -> {
                 logger.at(Level.SEVERE).log("Error saving inventory on disconnect for " + uuid + ": " + e.getMessage());
-            }
-        }, worldExecutor);
+                return null;
+            });
     }
 
     // -------------------------------------------------------------------------
@@ -164,7 +164,6 @@ public class WorldInventoryManager {
 
     private void apply(Player player, InventorySnapshot snapshot) {
         Inventory inv = player.getInventory();
-
         applyContainer(inv.getStorage(), snapshot.getStorage());
         applyContainer(inv.getArmor(), snapshot.getArmor());
         applyContainer(inv.getHotbar(), snapshot.getHotbar());
@@ -184,4 +183,10 @@ public class WorldInventoryManager {
             }
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Internal helper
+    // -------------------------------------------------------------------------
+
+    private record SnapshotPair(InventorySnapshot outgoing, InventorySnapshot incoming) {}
 }
