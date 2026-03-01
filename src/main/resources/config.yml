@@ -1,0 +1,8 @@
+# DogeWorldInventory Configuration
+# Worlds listed here have isolated inventories.
+# When a player moves between an isolated world and any other world,
+# their inventory is saved and restored per world.
+# Non-isolated <-> non-isolated transitions are left untouched (shared inventory).
+
+isolated-worlds:
+  - event
