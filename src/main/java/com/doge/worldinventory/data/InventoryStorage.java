@@ -7,8 +7,10 @@ import com.hypixel.hytale.logger.HytaleLogger;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.Writer;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.UUID;
 import java.util.logging.Level;
 
@@ -17,6 +19,13 @@ import java.util.logging.Level;
  *
  * Storage layout:
  *   {dataDir}/inventories/{uuid}/world_{worldName}.json
+ *
+ * Save sequence (write-verify-commit):
+ *   1. Write to world_{name}.json.tmp
+ *   2. Read back and verify Gson can parse it
+ *   3. Atomically rename .tmp → .json  (falls back to regular move on Windows/OneDrive)
+ *   Returns true only if all three steps succeed.
+ *   A false return means the original file is untouched and the caller must NOT clear.
  */
 public class InventoryStorage {
 
@@ -31,27 +40,60 @@ public class InventoryStorage {
     }
 
     /**
-     * Persist a snapshot to disk. Blocks the calling thread — call from an async executor.
+     * Write-verify-commit save. Returns true only if the snapshot was successfully
+     * written to disk AND read back without errors. Callers must not clear the
+     * player's inventory if this returns false.
      */
-    public void save(UUID uuid, String worldName, InventorySnapshot snapshot) {
+    public boolean save(UUID uuid, String worldName, InventorySnapshot snapshot) {
+        Path dir = inventoryDir(uuid);
+        Path finalFile = dir.resolve(fileName(worldName));
+        Path tempFile  = dir.resolve(fileName(worldName) + ".tmp");
+
         try {
-            Path dir = inventoryDir(uuid);
             if (!Files.exists(dir)) {
                 Files.createDirectories(dir);
             }
-            Path file = dir.resolve(fileName(worldName));
-            try (Writer writer = Files.newBufferedWriter(file)) {
+
+            // Step 1: write to temp file
+            try (Writer writer = Files.newBufferedWriter(tempFile)) {
                 gson.toJson(snapshot, writer);
             }
-            logger.at(Level.FINE).log("Saved inventory for " + uuid + " in world '" + worldName + "'");
+
+            // Step 2: read back and verify it parses correctly
+            InventorySnapshot verification;
+            try (Reader reader = Files.newBufferedReader(tempFile)) {
+                verification = gson.fromJson(reader, InventorySnapshot.class);
+            }
+            if (verification == null) {
+                logger.at(Level.SEVERE).log("Save verification failed for " + uuid
+                        + " world '" + worldName + "' — file parsed as null, aborting");
+                Files.deleteIfExists(tempFile);
+                return false;
+            }
+
+            // Step 3: commit — atomic rename if supported, regular move otherwise
+            try {
+                Files.move(tempFile, finalFile,
+                        StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(tempFile, finalFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            logger.at(Level.FINE).log("Saved and verified inventory for " + uuid
+                    + " in world '" + worldName + "'");
+            return true;
+
         } catch (IOException e) {
-            logger.at(Level.SEVERE).log("Failed to save inventory for " + uuid + " world '" + worldName + "': " + e.getMessage());
+            logger.at(Level.SEVERE).log("Failed to save inventory for " + uuid
+                    + " world '" + worldName + "': " + e.getMessage());
+            try { Files.deleteIfExists(tempFile); } catch (IOException ignored) {}
+            return false;
         }
     }
 
     /**
-     * Load a snapshot from disk. Returns null if no snapshot exists.
-     * Blocks the calling thread — call from an async executor.
+     * Load a snapshot from disk. Returns null if no snapshot exists or parsing fails.
      */
     public InventorySnapshot load(UUID uuid, String worldName) {
         Path file = inventoryDir(uuid).resolve(fileName(worldName));
@@ -63,7 +105,8 @@ public class InventoryStorage {
             logger.at(Level.FINE).log("Loaded inventory for " + uuid + " in world '" + worldName + "'");
             return snapshot;
         } catch (IOException e) {
-            logger.at(Level.SEVERE).log("Failed to load inventory for " + uuid + " world '" + worldName + "': " + e.getMessage());
+            logger.at(Level.SEVERE).log("Failed to load inventory for " + uuid
+                    + " world '" + worldName + "': " + e.getMessage());
             return null;
         }
     }
@@ -74,7 +117,6 @@ public class InventoryStorage {
         return dataDirectory.resolve("inventories").resolve(uuid.toString());
     }
 
-    /** Convert a world name to a safe filename, e.g. "world_default.json". */
     private String fileName(String worldName) {
         String safe = worldName.replaceAll("[^a-zA-Z0-9_\\-]", "_");
         return "world_" + safe + ".json";

@@ -78,11 +78,16 @@ public class WorldInventoryManager {
                 return new SnapshotPair(outgoing, incoming);
             }, worldExecutor)
 
-            // Step 3 — IO thread: save the outgoing snapshot
+            // Step 3 — IO thread: save the outgoing snapshot, abort if save fails
             .thenApplyAsync(pair -> {
                 if (pair == null) return null;
-                storage.save(uuid, previousWorld, pair.outgoing);
-                logger.at(Level.FINE).log("Saved " + uuid + " inventory for world '" + previousWorld + "'");
+                boolean saved = storage.save(uuid, previousWorld, pair.outgoing);
+                if (!saved) {
+                    logger.at(Level.SEVERE).log("ABORTING inventory swap for " + uuid
+                            + " — save to world '" + previousWorld + "' could not be verified."
+                            + " Inventory will NOT be cleared.");
+                    return null;
+                }
                 return pair;
             }, ioExecutor)
 
@@ -115,8 +120,13 @@ public class WorldInventoryManager {
 
             // Step 2 — IO thread: save to disk
             .thenAcceptAsync(snapshot -> {
-                storage.save(uuid, currentWorld, snapshot);
-                logger.at(Level.FINE).log("Saved " + uuid + " inventory on disconnect from world '" + currentWorld + "'");
+                boolean saved = storage.save(uuid, currentWorld, snapshot);
+                if (saved) {
+                    logger.at(Level.FINE).log("Saved " + uuid + " inventory on disconnect from world '" + currentWorld + "'");
+                } else {
+                    logger.at(Level.SEVERE).log("Failed to save inventory on disconnect for " + uuid
+                            + " from world '" + currentWorld + "' — items may be lost on next login");
+                }
             }, ioExecutor)
 
             .exceptionally(e -> {
