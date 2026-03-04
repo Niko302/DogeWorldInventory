@@ -65,16 +65,15 @@ public class DogeWorldInventoryPlugin extends JavaPlugin {
             World world = event.getWorld();
             String newWorld = world.getName();
 
-            // Defer to the world executor so the player is in the entity store before we call setGameMode.
-            // AddPlayerToWorldEvent fires before the entity is added to the store, so ref.getReference() is null here.
+            // Defer to the world executor — AddPlayerToWorldEvent fires before addedToStore(),
+            // so ref.getReference() is null at event time. By the next world tick it is set.
             world.execute(() -> {
-                var entityStore = world.getEntityStore();
-                var entityRef = entityStore.getRefFromUUID(uuid);
+                var entityRef = ref.getReference();
                 if (entityRef == null) {
-                    getLogger().at(Level.WARNING).log("setGameMode: entityRef null for " + uuid + " in world '" + newWorld + "'");
+                    getLogger().at(Level.WARNING).log("setGameMode: entityRef still null for " + uuid + " in world '" + newWorld + "'");
                     return;
                 }
-                Player.setGameMode(entityRef, GameMode.Adventure, entityStore.getStore());
+                Player.setGameMode(entityRef, GameMode.Adventure, entityRef.getStore());
                 getLogger().at(Level.INFO).log("Set " + uuid + " to Adventure in world '" + newWorld + "'");
             });
 

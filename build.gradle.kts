@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.doge"
-version = "1.1.5"
+version = "1.1.6"
 val javaVersion = 25
 
 repositories {
