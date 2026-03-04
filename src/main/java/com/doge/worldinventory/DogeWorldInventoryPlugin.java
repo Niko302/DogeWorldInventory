@@ -65,8 +65,14 @@ public class DogeWorldInventoryPlugin extends JavaPlugin {
             World world = event.getWorld();
             String newWorld = world.getName();
 
-            var entityRef = ref.getReference();
-            Player.setGameMode(entityRef, GameMode.Adventure, entityRef.getStore());
+            // Defer to world executor — ref.getReference() is null during AddPlayerToWorldEvent
+            // because the player hasn't been placed in the entity store yet.
+            world.execute(() -> {
+                var entityStore = world.getEntityStore();
+                var entityRef = entityStore.getRefFromUUID(uuid);
+                if (entityRef == null) return;
+                Player.setGameMode(entityRef, GameMode.Adventure, entityStore.getStore());
+            });
 
             manager.onPlayerAddedToWorld(uuid, player, newWorld, world);
         });
