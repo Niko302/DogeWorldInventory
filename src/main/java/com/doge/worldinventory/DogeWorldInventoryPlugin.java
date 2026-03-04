@@ -8,8 +8,7 @@ import com.hypixel.hytale.server.core.event.events.player.AddPlayerToWorldEvent;
 import com.hypixel.hytale.server.core.event.events.player.PlayerDisconnectEvent;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
-import com.hypixel.hytale.server.core.command.system.CommandManager;
-import com.hypixel.hytale.server.core.console.ConsoleSender;
+import com.hypixel.hytale.protocol.GameMode;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
 
@@ -66,7 +65,18 @@ public class DogeWorldInventoryPlugin extends JavaPlugin {
             World world = event.getWorld();
             String newWorld = world.getName();
 
-            CommandManager.get().handleCommand(ConsoleSender.INSTANCE, "gamemode adventure " + ref.getUsername());
+            // Defer to the world executor so the player is in the entity store before we call setGameMode.
+            // AddPlayerToWorldEvent fires before the entity is added to the store, so ref.getReference() is null here.
+            world.execute(() -> {
+                var entityStore = world.getEntityStore();
+                var entityRef = entityStore.getRefFromUUID(uuid);
+                if (entityRef == null) {
+                    getLogger().at(Level.WARNING).log("setGameMode: entityRef null for " + uuid + " in world '" + newWorld + "'");
+                    return;
+                }
+                Player.setGameMode(entityRef, GameMode.Adventure, entityStore.getStore());
+                getLogger().at(Level.INFO).log("Set " + uuid + " to Adventure in world '" + newWorld + "'");
+            });
 
             manager.onPlayerAddedToWorld(uuid, player, newWorld, world);
         });
