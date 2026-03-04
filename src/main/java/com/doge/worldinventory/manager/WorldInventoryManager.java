@@ -179,6 +179,7 @@ public class WorldInventoryManager {
         applyContainer(inv.getHotbar(), snapshot.getHotbar());
         applyContainer(inv.getUtility(), snapshot.getUtility());
         applyContainer(inv.getTools(), snapshot.getTool());
+        inv.setActiveHotbarSlot((byte) snapshot.getActiveHotbarSlot());
     }
 
     private void applyContainer(ItemContainer container, List<InventorySnapshot.SlotEntry> slots) {

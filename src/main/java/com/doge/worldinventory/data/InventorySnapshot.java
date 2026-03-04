@@ -13,7 +13,7 @@ public class InventorySnapshot {
     private List<SlotEntry> hotbar;    // 9 slots
     private List<SlotEntry> utility;   // 4 slots
     private List<SlotEntry> tool;      // 23 slots
-    private int activeHotbarSlot;
+    private byte activeHotbarSlot;
 
     public InventorySnapshot() {}
 
@@ -32,8 +32,8 @@ public class InventorySnapshot {
     public List<SlotEntry> getTool() { return tool; }
     public void setTool(List<SlotEntry> tool) { this.tool = tool; }
 
-    public int getActiveHotbarSlot() { return activeHotbarSlot; }
-    public void setActiveHotbarSlot(int activeHotbarSlot) { this.activeHotbarSlot = activeHotbarSlot; }
+    public byte getActiveHotbarSlot() { return activeHotbarSlot; }
+    public void setActiveHotbarSlot(byte activeHotbarSlot) { this.activeHotbarSlot = activeHotbarSlot; }
 
     /**
      * Represents one inventory slot — null entry means the slot is empty.
